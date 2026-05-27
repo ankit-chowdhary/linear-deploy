@@ -1,6 +1,7 @@
-# No `name:` at top level — that field requires Compose v2+.
-# We support both modern (docker compose) and legacy (docker-compose).
-# Without `name:`, the project name comes from the directory name.
+# Requires Docker Compose v2 (the `docker compose` plugin).
+# bootstrap.sh installs it; the legacy `docker-compose` v1.x has a
+# known KeyError: 'ContainerConfig' bug and is no longer supported.
+# Project name comes from the directory name (no top-level `name:`).
 
 services:
   postgres:

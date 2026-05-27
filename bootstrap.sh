@@ -93,19 +93,39 @@ ufw --force enable
 echo "==> Enabling fail2ban..."
 systemctl enable --now fail2ban
 
-echo "==> Installing Docker (with compose plugin)..."
-if ! command -v docker >/dev/null 2>&1; then
-    install -m 0755 -d /etc/apt/keyrings
+echo "==> Removing Ubuntu's docker packages if present..."
+# Ubuntu ships `docker.io` and `docker-compose` v1.29.2 in its own
+# repos. v1.29.2 has the known KeyError: 'ContainerConfig' bug when
+# recreating containers built by modern Docker engines. We must
+# uninstall these before adding Docker's official repo, otherwise
+# apt won't replace them with the upstream packages.
+apt-get remove -y --purge docker docker.io docker-doc docker-compose \
+    docker-compose-v2 podman-docker containerd runc 2>/dev/null || true
+
+echo "==> Adding Docker's official apt repo..."
+# Always (re)add — bootstrap is idempotent and we must not skip this
+# step if Docker happens to already be installed, otherwise the
+# compose plugin install below will fail with "Unable to locate
+# package docker-compose-plugin".
+install -m 0755 -d /etc/apt/keyrings
+if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
-    apt-get update -qq
 fi
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -qq
 
-# Install Docker plus the modern compose plugin AND the legacy
-# docker-compose binary for compatibility with our scripts.
+echo "==> Installing Docker Engine + Compose v2 plugin..."
+# Compose v2 only. The legacy `docker-compose` (Python, v1.x) is
+# intentionally NOT installed — it has the ContainerConfig bug.
 apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
-    docker-buildx-plugin docker-compose-plugin docker-compose
+    docker-buildx-plugin docker-compose-plugin
+
+# Sanity check: refuse to continue if the plugin isn't actually usable.
+if ! docker compose version >/dev/null 2>&1; then
+    echo "❌ 'docker compose' did not install correctly. Aborting."
+    exit 1
+fi
 
 usermod -aG docker "$DEPLOY_USER"
 systemctl enable --now docker

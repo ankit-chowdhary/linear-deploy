@@ -7,18 +7,15 @@ set -euo pipefail
 APP_DIR="$HOME/linear-clone"
 DEPLOY_REPO="${DEPLOY_REPO:-ankit-chowdhary/linear-deploy}"
 
-# Auto-detect which docker compose command works on this server.
-# Modern systems have `docker compose` (space). Older Ubuntu 22.04
-# may only have `docker-compose` (hyphen). We pick whichever works.
-if docker compose version >/dev/null 2>&1; then
-    DC="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
-    DC="docker-compose"
-else
-    echo "❌ Neither 'docker compose' nor 'docker-compose' is installed."
+# Require Compose v2. The legacy v1 (`docker-compose`, hyphen) has
+# a known ContainerConfig bug on container recreate — bootstrap.sh
+# installs the v2 plugin and refuses to continue without it.
+if ! docker compose version >/dev/null 2>&1; then
+    echo "❌ 'docker compose' (v2 plugin) is not installed."
     echo "    Re-run bootstrap.sh as root to fix."
     exit 1
 fi
+DC="docker compose"
 echo "==> Using compose command: $DC"
 
 read -rp "GitHub username: " GHCR_USER
@@ -85,10 +82,6 @@ sudo cp systemd/linear-clone.service /etc/systemd/system/
 sudo cp systemd/linear-backup.service /etc/systemd/system/
 sudo cp systemd/linear-backup.timer /etc/systemd/system/
 
-# Inject the right compose command into the systemd files based on
-# what was detected available on this system.
-sudo sed -i "s|__DOCKER_COMPOSE__|$DC|g" /etc/systemd/system/linear-clone.service
-sudo sed -i "s|__DOCKER_COMPOSE__|$DC|g" /etc/systemd/system/linear-backup.service
 sudo sed -i "s|/home/deploy/linear-clone|$APP_DIR|g" /etc/systemd/system/linear-*.service
 sudo sed -i "s|User=deploy|User=$(whoami)|g" /etc/systemd/system/linear-*.service
 
