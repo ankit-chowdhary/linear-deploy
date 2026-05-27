@@ -48,6 +48,11 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       REPORT_API_KEY: ${REPORT_API_KEY}
       ALLOWED_ORIGINS: "https://${DOMAIN}"
+      # APP_URL is the public origin the backend uses to mint
+      # outbound links (invite URLs, SSO redirect URI, etc.).
+      # Defaults to ALLOWED_ORIGINS[0] inside the app if unset,
+      # but setting it explicitly here makes the dependency clear.
+      APP_URL: "https://${DOMAIN}"
       ENVIRONMENT: production
     ports:
       - "127.0.0.1:8080:8080"
