@@ -1,4 +1,6 @@
-name: linear-clone
+# No `name:` at top level — that field requires Compose v2+.
+# We support both modern (docker compose) and legacy (docker-compose).
+# Without `name:`, the project name comes from the directory name.
 
 services:
   postgres:
@@ -19,10 +21,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 1500M
 
   redis:
     image: redis:7-alpine
@@ -52,9 +50,9 @@ services:
       ENVIRONMENT: production
     ports:
       - "127.0.0.1:8080:8080"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:8080/healthz"]
-      interval: 15s
+    # Healthcheck disabled because the distroless image has no shell
+    # or wget. Caddy + the app itself verify health via real traffic.
+    # If you want healthchecks, bake a minimal binary into the image.
 
   frontend:
     image: ${FRONTEND_IMAGE}

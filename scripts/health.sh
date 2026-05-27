@@ -1,7 +1,12 @@
 #!/bin/bash
 cd "$(dirname "$0")/.."
+if docker compose version >/dev/null 2>&1; then
+    DC="docker compose"
+else
+    DC="docker-compose"
+fi
 echo "=== Containers ==="
-docker compose -f docker-compose.prod.yml ps
+$DC -f docker-compose.prod.yml ps
 echo ""
 echo "=== Disk ==="
 df -h /

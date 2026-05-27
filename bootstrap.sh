@@ -1,9 +1,21 @@
 #!/bin/bash
-# Run on fresh OVH VPS as root
+# Run on a fresh Ubuntu 22.04 VPS as root.
+# Idempotent: safe to re-run.
 set -euo pipefail
 
 DEPLOY_USER="${DEPLOY_USER:-deploy}"
 [ "$(id -u)" -eq 0 ] || { echo "Run as root"; exit 1; }
+
+echo "==> Removing any pre-installed web servers (nginx/apache)..."
+# Many cloud images ship with these. They occupy ports 80/443 and
+# would block Caddy from starting. Stop them BEFORE installing Docker.
+for svc in nginx apache2; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        systemctl stop "$svc"
+        systemctl disable "$svc"
+    fi
+done
+apt-get remove -y --purge nginx nginx-common nginx-core apache2 2>/dev/null || true
 
 echo "==> Updating system..."
 export DEBIAN_FRONTEND=noninteractive
@@ -12,14 +24,28 @@ apt-get upgrade -y -qq -o Dpkg::Options::="--force-confold"
 
 echo "==> Installing essentials..."
 apt-get install -y -qq curl wget git vim htop ca-certificates gnupg lsb-release \
-    ufw fail2ban unattended-upgrades jq cron
+    ufw fail2ban unattended-upgrades jq cron pwgen
 
 echo "==> Creating deploy user..."
 if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
     useradd -m -s /bin/bash -G sudo "$DEPLOY_USER"
-    passwd -l "$DEPLOY_USER"
 fi
-if [ -f /root/.ssh/authorized_keys ] && [ ! -s /home/$DEPLOY_USER/.ssh/authorized_keys ]; then
+
+# Generate a strong password for the deploy user automatically.
+# Save it to a root-only file so the admin can find it later.
+# This handles the case where the admin SSH'd into root with a
+# password (no SSH key) — the deploy user needs SOME way to log in.
+DEPLOY_PASSWORD_FILE="/root/deploy-user-password.txt"
+if [ ! -f "$DEPLOY_PASSWORD_FILE" ]; then
+    DEPLOY_PASS=$(pwgen -s 20 1)
+    echo "$DEPLOY_PASS" > "$DEPLOY_PASSWORD_FILE"
+    chmod 600 "$DEPLOY_PASSWORD_FILE"
+    echo "$DEPLOY_USER:$DEPLOY_PASS" | chpasswd
+    echo "==> Deploy user password saved to $DEPLOY_PASSWORD_FILE"
+fi
+
+# Copy SSH keys from root if they exist (won't hurt if password-only)
+if [ -s /root/.ssh/authorized_keys ] && [ ! -s /home/$DEPLOY_USER/.ssh/authorized_keys ]; then
     mkdir -p /home/$DEPLOY_USER/.ssh
     cp /root/.ssh/authorized_keys /home/$DEPLOY_USER/.ssh/
     chown -R "$DEPLOY_USER:$DEPLOY_USER" /home/$DEPLOY_USER/.ssh
@@ -31,7 +57,11 @@ echo "==> Sudoers for deploy user..."
 cat > /etc/sudoers.d/deploy <<SUDO
 $DEPLOY_USER ALL=(root) NOPASSWD: /bin/systemctl restart linear-clone, \
     /bin/systemctl start linear-clone, /bin/systemctl stop linear-clone, \
-    /bin/systemctl status linear-clone, /usr/bin/docker system prune *
+    /bin/systemctl status linear-clone, /bin/systemctl enable linear-clone, \
+    /bin/systemctl disable linear-clone, /usr/bin/docker system prune *, \
+    /bin/cp /home/$DEPLOY_USER/linear-clone/systemd/*, \
+    /bin/sed -i * /etc/systemd/system/linear-*, \
+    /bin/systemctl daemon-reload
 SUDO
 chmod 440 /etc/sudoers.d/deploy
 
@@ -41,9 +71,12 @@ cp /etc/ssh/sshd_config.orig /etc/ssh/sshd_config
 cat >> /etc/ssh/sshd_config <<SSH
 
 PermitRootLogin no
-PasswordAuthentication no
 PubkeyAuthentication yes
 AllowUsers $DEPLOY_USER
+
+# Allow password auth for deploy user only (key auth still preferred)
+Match User $DEPLOY_USER
+    PasswordAuthentication yes
 SSH
 sshd -t && systemctl restart ssh
 
@@ -60,15 +93,20 @@ ufw --force enable
 echo "==> Enabling fail2ban..."
 systemctl enable --now fail2ban
 
-echo "==> Installing Docker..."
+echo "==> Installing Docker (with compose plugin)..."
 if ! command -v docker >/dev/null 2>&1; then
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
     apt-get update -qq
-    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
+
+# Install Docker plus the modern compose plugin AND the legacy
+# docker-compose binary for compatibility with our scripts.
+apt-get install -y -qq docker-ce docker-ce-cli containerd.io \
+    docker-buildx-plugin docker-compose-plugin docker-compose
+
 usermod -aG docker "$DEPLOY_USER"
 systemctl enable --now docker
 
@@ -95,9 +133,16 @@ mkdir -p /home/$DEPLOY_USER/linear-clone
 chown -R "$DEPLOY_USER:$DEPLOY_USER" /home/$DEPLOY_USER
 
 echo ""
+echo "============================================================"
 echo "✅ Bootstrap complete!"
+echo "============================================================"
 echo ""
-echo "Next: reconnect as the deploy user:"
+if [ -f "$DEPLOY_PASSWORD_FILE" ]; then
+    echo "📌 IMPORTANT: Deploy user password is in $DEPLOY_PASSWORD_FILE"
+    echo "    View it now: cat $DEPLOY_PASSWORD_FILE"
+    echo ""
+fi
+echo "Next: reconnect as deploy user:"
 echo "  ssh $DEPLOY_USER@$(hostname -I | awk '{print $1}')"
 echo ""
-echo "Then run install.sh"
+echo "Then run: bash install.sh"
