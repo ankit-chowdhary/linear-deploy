@@ -1,0 +1,10 @@
+[Unit]
+Description=Linear Clone daily backup
+Requires=linear-clone.service
+After=linear-clone.service
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/home/deploy/linear-clone
+ExecStart=/home/deploy/linear-clone/scripts/backup.sh
